@@ -13,11 +13,11 @@ from functools import lru_cache
 from matplotlib.dates import DateFormatter
 from constants import (BASE_URL, HISTORICAL_PRICE_URL, SWISS_STOCKS, 
                        SWISS_MARKET_ASSETS, STOCK_THRESHOLD, ETF_THRESHOLD)
-from keys import API_KEY, OPENAI_API_KEY
+#from keys import API_KEY, OPENAI_API_KEY
 import streamlit as st
 
 client = OpenAI(
-    api_key= OPENAI_API_KEY,
+    api_key=st.secrets["api_keys"]["OPENAI_API_KEY"],
     organization="org-tlUjsA0VUZEicWZ3HTdlVHJH",
     project="proj_TVJJRleVFZjzvzzMol4NWKPq"
 )
@@ -26,13 +26,15 @@ client = OpenAI(
 @st.cache_resource(ttl=3600)
 def fetch_stock_data(symbol):
     try:
-        response = requests.get(f"{BASE_URL}quote/{symbol}?apikey={API_KEY}")
+        # Access API key from secrets
+        api_key = st.secrets["api_keys"]["API_KEY"]
+        response = requests.get(f"{BASE_URL}quote/{symbol}?apikey={api_key}")
         response.raise_for_status()
         data = response.json()
         if not data:
             st.warning(f"No data available for {symbol}.")
             return None
-        return {'price': data[0]['price'], 'previousClose': data[0]['previousClose'], 'fullName': data[0]['name']}  # Assuming 'name' is the key for full name
+        return {'price': data[0]['price'], 'previousClose': data[0]['previousClose'], 'fullName': data[0]['name']}
     except requests.RequestException as e:
         st.error(f"Failed to retrieve data: {e}")
         return None
@@ -40,8 +42,10 @@ def fetch_stock_data(symbol):
 
 @st.cache_resource(ttl=3600)
 def fetch_historical_data(symbol):
-    url = f"{BASE_URL}historical-price-full/{symbol}?timeseries=180&apikey={API_KEY}"
     try:
+        # Access API key from secrets
+        api_key = st.secrets["api_keys"]["API_KEY"]
+        url = f"{BASE_URL}historical-price-full/{symbol}?timeseries=180&apikey={api_key}"
         response = requests.get(url)
         response.raise_for_status()
         data = response.json()['historical']

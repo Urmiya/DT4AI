@@ -128,3 +128,5 @@ cython_debug/
 streamlit_app/data/*
 
 keys.py
+
+.streamlit/
