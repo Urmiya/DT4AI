@@ -60,6 +60,7 @@ def get_chatgpt_summary(query):
     """
     Function to get summaries from the ChatGPT API using GPT-4.
     Queries recent news based on the percentage change of a financial product.
+    Web Crawler or news API still needs to be integrated. 
     """
     try:
         chat_completion = client.chat.completions.create(
@@ -97,46 +98,52 @@ def calculate_modified_z_scores(prices):
 
     return [0.6745 * (x - median) / mad for x in prices]
 
-def outlier_detection(today_price, historical_prices):
+def outlier_detection(today_price, historical_prices, z_score_threshold):
     all_prices = historical_prices + [today_price['price']]
     historical_z_scores = calculate_modified_z_scores(historical_prices)
     all_z_scores = calculate_modified_z_scores(all_prices)
 
     # Last Z-score corresponds to today's price
     today_z_score = all_z_scores[-1]
-    threshold_z = 3.5
 
-    # Check if today's price is an outlier
-    is_outlier = abs(today_z_score) > threshold_z
+    # Check if today's price is an outlier based on user-defined Z-score threshold
+    is_outlier = abs(today_z_score) > z_score_threshold
     return is_outlier, all_z_scores[-2:], historical_z_scores
+
 
 def initialize_app():
     st.title("Variance Check for Assets")
     st.sidebar.write("This page checks if the asset's current price change is above a threshold and compares today's variance against historical variance.")
-    asset_symbol = st.sidebar.text_input("Enter a ticker symbol (e.g., 'AAPL'):", '')
 
+    asset_symbol = st.sidebar.text_input("Enter a ticker symbol (e.g., 'AAPL'):", '')
     if asset_symbol:
-        selected_asset = {'symbol': asset_symbol.upper(), 'type': 'Stock'}  # Default to Stock for simplicity
+        selected_asset = {'symbol': asset_symbol.upper(), 'type': 'Stock'}  # Default type as 'Stock'
     else:
         selected_asset = st.sidebar.selectbox('Or select an Asset', SWISS_MARKET_ASSETS, format_func=lambda x: x['symbol'])
 
-    return selected_asset
+    # Dynamic threshold sliders based on asset type
+    if selected_asset.get('type', 'Stock') == 'ETF':
+        price_change_threshold = st.sidebar.slider("Define ETF price change threshold (%)", min_value=0.0, max_value=10.0, value=2.0, step=0.1)
+    else:
+        price_change_threshold = st.sidebar.slider("Define Stock price change threshold (%)", min_value=0.0, max_value=10.0, value=1.0, step=0.1)
 
-def process_asset_data(selected_asset):
-    threshold = ETF_THRESHOLD if selected_asset['type'] == 'ETF' else STOCK_THRESHOLD
+    z_score_threshold = st.sidebar.slider("Set Z-score threshold for outlier detection", min_value=0.0, max_value=5.0, value=2.5, step=0.1)
+
+    return selected_asset, price_change_threshold, z_score_threshold
+
+def process_asset_data(selected_asset, threshold):
     historical_prices, historical_dates = fetch_historical_data(selected_asset['symbol'])
     today_price_data = fetch_stock_data(selected_asset['symbol'])
-    
+
     if not today_price_data or not historical_prices:
         st.error("Failed to fetch today's price or historical data for the selected asset.")
         return None  # Early exit if data fetch fails
-    
+
     today_price = today_price_data['price']
     previous_close = today_price_data['previousClose']
-    today_change = ((today_price - previous_close) / previous_close) * 100  
-    
+    today_change = ((today_price - previous_close) / previous_close) * 100
     historical_mean, historical_std_dev = calculate_std_dev(historical_prices)
-    
+
     return (today_price, today_change, historical_mean, historical_std_dev, historical_dates, historical_prices, threshold)
 
 def plot_historical_prices(historical_dates, historical_prices):
@@ -191,50 +198,48 @@ def plot_price_distribution(historical_mean, historical_std_dev, today_price):
     st.pyplot(fig)
 
 def display_results(today_price, today_change, historical_mean, historical_std_dev,
-                    historical_dates, historical_prices, threshold, today_price_data, selected_asset):
+                    historical_dates, historical_prices, price_change_threshold, z_score_threshold, 
+                    today_price_data, selected_asset):
     # Calculate Z-scores for all involved prices
-    is_outlier, today_z_scores, historical_z_scores = outlier_detection(today_price_data, historical_prices)
+    is_outlier, today_z_scores, historical_z_scores = outlier_detection(today_price_data, historical_prices, z_score_threshold)
 
-    with st.expander("Historical Price Development"):
-        plot_historical_prices(historical_dates, historical_prices)
-    
-    with st.expander("Price Distribution Comparison"):
-        plot_price_distribution(historical_mean, historical_std_dev, today_price)
+    col1, col2 = st.columns(2)
+    with col1:
+        with st.expander("Historical Price Development"):
+            plot_historical_prices(historical_dates, historical_prices)
 
-    # Check if today's price change is an outlier
-    today_is_outlier = abs(today_z_scores[-1]) > 3.5
+    with col2:
+        with st.expander("Price Distribution"):
+            plot_price_distribution(historical_mean, historical_std_dev, today_price)
 
-    # Create DataFrame for results 
     results_df = pd.DataFrame({
         "Symbol": [selected_asset['symbol']],
         "Full Name": [today_price_data['fullName']],
         "Today's Price": [today_price],
         "Yesterday's Price": [today_price_data['previousClose']],
         "Percentage Change": [f"{today_change:.2f}%"],
-        "Change Above Threshold": ["Yes" if abs(today_change) > threshold else "No"],
+        "Change Above Threshold": ["Yes" if abs(today_change) > price_change_threshold else "No"],
         "Today's Z-Score": [f"{today_z_scores[-1]:.2f}"],
-        "Outlier Status": ["Yes" if today_is_outlier else "No"]
+        "Outlier Status": ["Yes" if is_outlier else "No"]
     })
-    
-    # Convert DataFrame to CSV for download
+
     csv = results_df.to_csv(index=False)
     b64 = base64.b64encode(csv.encode()).decode()
     href = f'<a href="data:file/csv;base64,{b64}" download="{selected_asset["symbol"]}_price_results.csv">Download Results as CSV</a>'
-    
-    # Display DataFrame and download link
     st.write(results_df)
     st.markdown(href, unsafe_allow_html=True)
-    
-    # Display messages based on the threshold check and z-score analysis
-    if today_is_outlier:
+
+    if is_outlier:
         st.error(f"Today's price change is an outlier with a Z-score of {today_z_scores[-1]:.2f}.")
     else:
         st.success("Today's price change is not considered an outlier based on Z-scores.")
 
-    if abs(today_change) > threshold:
-        st.success(f"The price change today is {today_change:.2f}%, which is above the {threshold}% threshold.")
+    if abs(today_change) > price_change_threshold:
+        st.success(f"The price change today is {today_change:.2f}%, which is above the {price_change_threshold}% threshold.")
     else:
-        st.error(f"The price change today is {today_change:.2f}%, which is below the {threshold}% threshold. This might indicate less market activity or stability depending on the context.")
+        st.error(f"The price change today is {today_change:.2f}%, which is below the {price_change_threshold}% threshold. This might indicate less market activity or stability depending on the context.")
+
+    
 
 def display_stock_data(stock_list):
     results = []
@@ -263,29 +268,32 @@ def display_stock_data(stock_list):
     st.markdown(href, unsafe_allow_html=True)
 
 def variance_check_page():
-    selected_asset = initialize_app()
-    result = process_asset_data(selected_asset)
+    selected_asset, price_change_threshold, z_score_threshold = initialize_app()
+    result = process_asset_data(selected_asset, price_change_threshold)
     
     if result:
         today_price, today_change, historical_mean, historical_std_dev, historical_dates, historical_prices, threshold = result
         today_price_data = fetch_stock_data(selected_asset['symbol'])
         
         if today_price_data:
-            display_results(today_price, today_change, historical_mean, historical_std_dev, historical_dates, historical_prices, threshold, today_price_data, selected_asset)
+            display_results(today_price, today_change, historical_mean, historical_std_dev, historical_dates, historical_prices, price_change_threshold, z_score_threshold, today_price_data, selected_asset)
             
-            if st.checkbox("Generate Summary of Relevant News"):
-                st.write("Checkbox is checked, generating summary...")
-                news_query = f"Provide a summary of recent news related to the {today_price_data['fullName']} ({selected_asset['symbol']}) which experienced a {today_change:.2f}% change yesterday."
-                
-                summary = get_chatgpt_summary(news_query)
-                st.write("### Summary of Relevant News")
-                st.write(summary)
-                
-                print("Sending query to API:", news_query)
+            with st.expander("Generate News Summary"):
+                if st.checkbox("Generate Summary of Relevant News"):
+                    st.write("Checkbox is checked, generating summary...")
+                    news_query = f"Provide a summary of recent news related to the {today_price_data['fullName']} ({selected_asset['symbol']}) which experienced a {today_change:.2f}% change yesterday."
+                    
+                    summary = get_chatgpt_summary(news_query)
+                    st.write("### Summary of Relevant News")
+                    st.write(summary)
+                    
+                    print("Sending query to API:", news_query)
         else:
             st.error("Failed to retrieve today's price data.")
     else:
         st.error("Failed to process asset data.")
+
+
 
 def swiss_market_assets_page():
     st.title("Overview of Swiss Market Assets")
